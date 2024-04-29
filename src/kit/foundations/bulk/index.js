@@ -1,4 +1,4 @@
-const {asyncIter2Array} = require("../utils/async");
+const {asyncIter2Array} = require("../../utils/async");
 const _ = require("lodash");
 
 class Bulk {

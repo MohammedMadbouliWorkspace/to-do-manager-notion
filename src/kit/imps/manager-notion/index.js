@@ -2,7 +2,9 @@ const {Notion} = require("../../foundations/notion");
 const {asyncIter2Array} = require("../../utils/async/index");
 const _ = require("lodash")
 const moment = require('moment-timezone');
-const {modify, merge} = require("../../utils/iter");
+const {modify, merge, dynamic} = require("../../utils/iter");
+const {Airtable} = require("../../foundations/airtable");
+const {Action} = require("../../foundations/bulk");
 
 class ManagerNotionBase {
     constructor({accessToken, tasksDatabaseId, tasksPerRound, timeZone}) {
@@ -15,6 +17,390 @@ class ManagerNotionBase {
         )
         this._tasksDatabaseId = tasksDatabaseId
         this._timeZone = timeZone
+    }
+}
+
+class ManagerNotionTasksDeltaHandler extends ManagerNotionBase {
+    constructor(props) {
+        super(props)
+        this._tasksDelta = {}
+    }
+
+    storeIds = async (cells) =>
+        await this._airtable
+            .base(this._airtableBaseId)
+            .table(this._airtableIdsTableId)
+            .bulkCreateByCells(
+                cells,
+                ["notionId", "microsoftId", "parentNotionId", "parentMicrosoftId"]
+            )
+
+    deleteIds = async (recordIds) =>
+        await this._airtable
+            .base(this._airtableBaseId)
+            .table(this._airtableIdsTableId)
+            .bulkDelete(recordIds)
+
+    storeData = async (cells) =>
+        await this._airtable
+            .base(this._airtableBaseId)
+            .table(this._airtableDataTableId)
+            .bulkCreateByCells(
+                cells,
+                ["notionId", "microsoftId", "notionData", "microsoftData"]
+            )
+
+    editData = async (cells) =>
+        await this._airtable
+            .base(this._airtableBaseId)
+            .table(this._airtableDataTableId)
+            .bulkEditByCells(
+                cells,
+                ["notionData", "microsoftData"]
+            )
+
+    editDataByField = async (cells, field) =>
+        await this._airtable
+            .base(this._airtableBaseId)
+            .table(this._airtableDataTableId)
+            .bulkEditByQuery(
+                cells.map(
+                    ([value, notionData, microsoftData]) => (
+                        {
+                            query: {
+                                [field]: value
+                            },
+                            fields: {
+                                notionData,
+                                microsoftData
+                            }
+                        }
+                    )
+                )
+            )
+
+    deleteData = async (recordIds) =>
+        await this._airtable
+            .base(this._airtableBaseId)
+            .table(this._airtableDataTableId)
+            .bulkDelete(recordIds)
+
+    deleteDataByField = async (values, field) =>
+        await this._airtable
+            .base(this._airtableBaseId)
+            .table(this._airtableDataTableId)
+            .bulkDeleteByQuery(
+                {
+                    [field]: values
+                }
+            )
+
+    config = (
+        {
+            airtableConfig: {
+                apiKey: airtableAPIKey,
+                baseId: airtableBaseId,
+                dataTableId: airtableDataTableId,
+                idsTableId: airtableIdsTableId,
+                syncCheckpointsTableId: airtableSyncCheckpointsTableId,
+            }
+        }
+    ) => {
+        this._airtable = new Airtable(
+            {
+                apiKey: airtableAPIKey
+            }
+        )
+        this._airtableBaseId = airtableBaseId
+        this._airtableIdsTableId = airtableIdsTableId
+        this._airtableDataTableId = airtableDataTableId
+        this._airtableSyncCheckpointsTableId = airtableSyncCheckpointsTableId
+    }
+
+    provide = (tasksDelta) => {
+        this._tasksDelta = tasksDelta
+    }
+
+    apply = async () => {
+        const {toEdit, toCreate, toDelete, toRefresh} = this._tasksDelta
+
+        const toEditCD = Action.connect(
+            toEdit,
+            await asyncIter2Array(
+                toEdit,
+                async ({ids: {notionId}, data}) =>
+                    await this._notion.page(notionId).edit(
+                        this._createNotionRequestBody(data)
+                    )
+            ),
+            "ids.notionId",
+            "id",
+            "flat"
+        )
+
+        await this.editData(
+            toEditCD.map(
+                (
+                    [,
+                        {
+                            ids: {airtableId},
+                            syncData: {microsoftData}
+                        },
+                        notionData
+                    ]
+                ) => [
+                    airtableId,
+                    JSON.stringify(notionData),
+                    JSON.stringify(microsoftData)
+                ]
+            )
+        )
+
+        const [toCreateReady, toCreateBending] = _.partition(
+            toCreate,
+            ({ids: {parentNotionId}}) => parentNotionId
+        )
+
+        const [toCreateBendingParents, toCreateBendingChildren] = _.partition(
+            toCreateBending,
+            ({ids: {parentMicrosoftId}}) => !parentMicrosoftId
+        )
+
+        const toCreateReadyCD =
+            await asyncIter2Array(
+                toCreateReady,
+                async ({
+                           ids: {microsoftId, checklistItemMicrosoftId, parentMicrosoftId, parentNotionId},
+                           data,
+                           syncData: {microsoftData}
+                       }) => {
+                    const notionData = await this._notion
+                        .database(this._tasksDatabaseId)
+                        .create(
+                            this._createNotionRequestBody({...data, parentNotionId})
+                        )
+
+                    return {
+                        notionId: notionData?.id,
+                        parentNotionId,
+                        microsoftId,
+                        parentMicrosoftId,
+                        checklistItemMicrosoftId,
+                        notionData,
+                        microsoftData
+                    }
+                }
+            )
+
+        const toCreateBendingParentsCD =
+            await asyncIter2Array(
+                toCreateBendingParents,
+                async ({ids: {microsoftId}, data, syncData: {microsoftData}}) => {
+                    const notionData = await this._notion
+                        .database(this._tasksDatabaseId)
+                        .create(
+                            this._createNotionRequestBody(data)
+                        )
+
+                    return {
+                        notionId: notionData?.id,
+                        microsoftId,
+                        notionData,
+                        microsoftData
+                    }
+                }
+            )
+
+        const toCreateBendingChildrenCD =
+            await asyncIter2Array(
+                Action.connect(
+                    toCreateBendingChildren,
+                    toCreateBendingParentsCD,
+                    "ids.parentMicrosoftId",
+                    "microsoftId",
+                    "flat"
+                ),
+                async (
+                    [,
+                        {
+                            ids: {
+                                microsoftId,
+                                parentMicrosoftId,
+                                checklistItemMicrosoftId
+                            },
+                            data,
+                            syncData: {
+                                microsoftData
+                            }
+                        },
+                        {
+                            notionId: parentNotionId
+                        }
+                    ]
+                ) => {
+                    const notionData = await this._notion
+                        .database(this._tasksDatabaseId)
+                        .create(
+                            this._createNotionRequestBody({...data, parentNotionId})
+                        )
+
+                    return {
+                        notionId: notionData?.id,
+                        parentNotionId,
+                        microsoftId,
+                        parentMicrosoftId,
+                        checklistItemMicrosoftId,
+                        notionData,
+                        microsoftData
+                    }
+                }
+            )
+
+        const toCreateCD = [
+            ...toCreateReadyCD,
+            ...toCreateBendingParentsCD,
+            ...toCreateBendingChildrenCD
+        ]
+
+
+        await this.storeData(
+            toCreateCD.map(
+                ({
+                     notionId,
+                     microsoftId,
+                     notionData,
+                     microsoftData
+                 }) => [notionId, microsoftId, JSON.stringify(notionData), JSON.stringify(microsoftData)]
+            )
+        )
+
+        await this.storeIds(
+            toCreateCD.filter(
+                (
+                    {
+                        notionId,
+                        checklistItemMicrosoftId,
+                        parentNotionId,
+                        parentMicrosoftId
+                    }
+                ) => notionId && checklistItemMicrosoftId && parentNotionId && parentMicrosoftId
+            ).map(
+                (
+                    {
+                        notionId,
+                        checklistItemMicrosoftId,
+                        parentNotionId,
+                        parentMicrosoftId
+                    }
+                ) => [
+                    notionId,
+                    checklistItemMicrosoftId,
+                    parentNotionId,
+                    parentMicrosoftId
+                ]
+            )
+        )
+
+        const toDeleteCD = Action.connect(
+            toDelete,
+            await asyncIter2Array(
+                toDelete,
+                async ({ids: {notionId}}) =>
+                    await this._notion.page(notionId).edit(
+                        this._createNotionRequestBody({archived: true})
+                    )
+            ),
+            "ids.notionId",
+            "id",
+            "flat"
+        )
+
+        await this.deleteDataByField(
+            toDeleteCD.map(([notionId]) => notionId),
+            "notionId"
+        )
+
+        await this.deleteIds(
+            toDeleteCD
+                .filter(([, {ids: {idsTableAirtableId}},]) => idsTableAirtableId)
+                .map(([, {ids: {idsTableAirtableId}},]) => idsTableAirtableId),
+        )
+
+        const toRefreshCD = Action.connect(
+            toRefresh,
+            await asyncIter2Array(
+                toRefresh,
+                async ({ids: {notionId}}) =>
+                    await this._notion.page(notionId).get()
+            ),
+            "ids.notionId",
+            "id",
+            "flat"
+        )
+
+        await this.editDataByField(
+            toRefreshCD.map(
+                (
+                    [,
+                        {ids: {notionId}, syncData: {microsoftData}},
+                        notionData
+                    ]
+                ) => [
+                    notionId,
+                    JSON.stringify(notionData),
+                    JSON.stringify(microsoftData)
+                ]
+            ),
+            "notionId"
+        )
+
+    }
+
+    _createNotionRequestBody = ({checked, emoji, title, date, parentNotionId, archived}) => {
+        const [, , editTimeSyncString] = ManagerNotionDetector._createEditTime(this._timeZone)
+
+        return dynamic(
+            {
+                icon: {
+                    type: emoji ? "emoji" : undefined,
+                    emoji
+                },
+                archived,
+                properties: {
+                    "الاسم": {
+                        "title": [
+                            {
+                                "text": {
+                                    "content": title
+                                }
+                            }
+                        ]
+                    },
+                    "تم": {
+                        checkbox: checked
+                    },
+                    "متزامن": {
+                        checkbox: !archived
+                    },
+                    "التاريخ": {
+                        date
+                    },
+                    "تفصيلة لـ": {
+                        relation: [
+                            {
+                                id: parentNotionId
+                            }
+                        ]
+                    },
+                    "وقت التعديل السابق": {
+                        date: {
+                            start: editTimeSyncString,
+                        }
+                    }
+                }
+            },
+            { preserveEmpty: false }
+        )
     }
 }
 
@@ -392,6 +778,7 @@ class ManagerNotion extends ManagerNotionBase {
         super(props)
         this.newTasks = new ManagerNotionNewTasksDetector(props)
         this.editedTasks = new ManagerNotionEditedTasksDetector(props)
+        this.asTasksDelta = new ManagerNotionTasksDeltaHandler(props)
     }
 }
 

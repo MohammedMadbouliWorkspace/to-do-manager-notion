@@ -41,7 +41,47 @@ const merge = (obj1, obj2) => {
     )
 }
 
+const clean = (obj, {preserveNull = true, preserveEmpty = true}={}) => {
+    if (_.isObject(obj) && !_.isArray(obj)) {
+        const cleanedObject = _.pickBy(
+            obj,
+            (value) => {
+                if (preserveNull) {
+                    return !_.isUndefined(value)
+                }
+                return !(_.isUndefined(value) || _.isNull(value))
+            }
+        )
+
+        for (const key in cleanedObject) {
+            const cleanedValue = clean(cleanedObject[key], {preserveNull, preserveEmpty})
+            cleanedObject[key] = cleanedValue
+
+            if (_.isObject(cleanedValue) && _.isEmpty(cleanedValue) && !preserveEmpty) {
+                delete cleanedObject[key];
+            }
+        }
+
+        return cleanedObject
+
+    } else if (_.isArray(obj)) {
+
+        return _.compact(
+            _.map(obj, (obj) => clean(obj, {preserveNull, preserveEmpty}))
+        ).filter(
+            (a) =>
+                _.isObject(a) && !preserveEmpty ?
+                    !_.isEmpty(a) : a
+        )
+
+    } else {
+        return obj
+    }
+}
+
 exports.diff = diff
+exports.clean = clean
+exports.dynamic = clean
 exports.modify = modify
 exports.merge = merge
 exports.tandemIter = tandemIter

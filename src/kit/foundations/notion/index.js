@@ -13,6 +13,12 @@ class Page {
             ...args
         }
     )
+
+    get = () => this._client.pages.retrieve(
+        {
+            page_id: this._id
+        }
+    )
 }
 
 class Database {
@@ -26,6 +32,16 @@ class Database {
 
     page = (id) => new Page(id, this._client)
 
+    create = (args) =>
+        this._client.pages.create(
+            {
+                parent: {
+                    database_id: this._id
+                },
+                ...args
+            }
+        )
+
     query = (query, {scrolling = this._autoScrolling, scrollingSize = this._scrollingSize, limit = this._limit} = {}) =>
         Notion._dependsOnScrollingSetting(
             this._client.databases.query,
@@ -36,7 +52,11 @@ class Database {
             {scrolling, scrollingSize, limit}
         )
 
-    getPagesByIds = (name, ids, {scrolling = this._autoScrolling, scrollingSize = this._scrollingSize, limit = this._limit} = {}) =>
+    getPagesByIds = (name, ids, {
+        scrolling = this._autoScrolling,
+        scrollingSize = this._scrollingSize,
+        limit = this._limit
+    } = {}) =>
         ids?.length ? Notion._dependsOnScrollingSetting(
             this._client.databases.query,
             {
@@ -82,7 +102,11 @@ class Notion {
 
     database = (id) => new Database(id, this._client, this._autoScrolling, this._scrollingSize, this._limit)
 
-    databases = async ({scrolling = this._autoScrolling, scrollingSize = this._scrollingSize, limit = this._limit} = {}) =>
+    databases = async ({
+                           scrolling = this._autoScrolling,
+                           scrollingSize = this._scrollingSize,
+                           limit = this._limit
+                       } = {}) =>
         Notion._dependsOnScrollingSetting(
             this._client.search,
             {
@@ -102,7 +126,7 @@ class Notion {
             page_size: scrollingSize
         })
 
-    static _scroll = (method, size = 100, limit = Infinity, counter=0) => async function* (args) {
+    static _scroll = (method, size = 100, limit = Infinity, counter = 0) => async function* (args) {
         const response = await method(
             {
                 ...args,

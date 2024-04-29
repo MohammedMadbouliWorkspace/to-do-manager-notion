@@ -18,6 +18,7 @@
   "dependencies": {
     "@babel/preset-env": "^7.24.3",
     "@notionhq/client": "^2.2.15",
+    "airtable": "^0.12.2",
     "lodash": "^4.17.21",
     "moment-timezone": "^0.5.45",
     "uuid": "^9.0.1",
