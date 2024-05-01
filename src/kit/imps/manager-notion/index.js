@@ -315,17 +315,6 @@ class ManagerNotionTasksDeltaHandler extends ManagerNotionBase {
             "flat"
         )
 
-        await this.deleteDataByField(
-            toDeleteCD.map(([notionId]) => notionId),
-            "notionId"
-        )
-
-        await this.deleteIds(
-            toDeleteCD
-                .filter(([, {ids: {idsTableAirtableId}},]) => idsTableAirtableId)
-                .map(([, {ids: {idsTableAirtableId}},]) => idsTableAirtableId),
-        )
-
         const toRefreshCD = Action.connect(
             toRefresh,
             await asyncIter2Array(
@@ -365,7 +354,6 @@ class ManagerNotionTasksDeltaHandler extends ManagerNotionBase {
                     type: emoji ? "emoji" : undefined,
                     emoji
                 },
-                archived,
                 properties: {
                     "الاسم": {
                         "title": [
@@ -379,8 +367,11 @@ class ManagerNotionTasksDeltaHandler extends ManagerNotionBase {
                     "تم": {
                         checkbox: checked
                     },
+                    "محذوف": {
+                        checkbox: archived
+                    },
                     "متزامن": {
-                        checkbox: !archived
+                        checkbox: true
                     },
                     "التاريخ": {
                         date
@@ -392,11 +383,11 @@ class ManagerNotionTasksDeltaHandler extends ManagerNotionBase {
                             }
                         ]
                     },
-                    "وقت التعديل السابق": {
+                    "وقت التعديل السابق": !archived ? {
                         date: {
                             start: editTimeSyncString,
                         }
-                    }
+                    } : {}
                 }
             },
             { preserveEmpty: false }
