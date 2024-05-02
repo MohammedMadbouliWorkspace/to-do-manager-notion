@@ -711,7 +711,7 @@ class ManagerNotionEditedTasksDetector extends ManagerNotionDetector {
                     sorts: [
                         {
                             timestamp: 'last_edited_time',
-                            direction: 'descending'
+                            direction: 'ascending'
                         }
                     ]
                 }
@@ -750,7 +750,7 @@ class ManagerNotionNewTasksDetector extends ManagerNotionDetector {
                     sorts: [
                         {
                             property: 'التاريخ',
-                            direction: 'descending',
+                            direction: 'ascending',
                         },
                     ],
                 }
